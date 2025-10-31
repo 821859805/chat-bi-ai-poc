@@ -2,6 +2,7 @@ package com.chatbi.service;
 
 import com.chatbi.model.DatabaseConnection;
 import com.chatbi.model.DatabaseConnectionCreate;
+import com.chatbi.model.DatabaseConnectionTest;
 import com.chatbi.model.DatabaseConnectionUpdate;
 import com.chatbi.repository.DatabaseConnectionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,9 +10,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -227,6 +234,71 @@ class DatabaseConnectionServiceTest {
 
         assertThat(service.deleteConnection("two")).isTrue();
         verify(repository).deleteById("two");
+    }
+
+    @Test
+    void getConnection_shouldDelegateRepository() {
+        DatabaseConnection connection = buildConnection("conn-1", "Conn");
+        when(repository.findById("conn-1")).thenReturn(Optional.of(connection));
+
+        Optional<DatabaseConnection> result = service.getConnection("conn-1");
+
+        assertThat(result).contains(connection);
+    }
+
+    @Test
+    void testConnection_shouldReturnSuccessWhenVersionFetched() throws Exception {
+        DatabaseConnectionTest request = new DatabaseConnectionTest();
+        request.setHost("127.0.0.1");
+        request.setPort(3307);
+        request.setDatabaseName("analytics");
+        request.setCharsetName("utf8mb4");
+        request.setUsername("tester");
+        request.setPassword("secret");
+
+        String expectedUrl = "jdbc:mariadb://127.0.0.1:3307/analytics?useUnicode=true&characterEncoding=utf8mb4&useSSL=false&serverTimezone=UTC";
+
+        Connection connection = org.mockito.Mockito.mock(Connection.class);
+        Statement statement = org.mockito.Mockito.mock(Statement.class);
+        ResultSet resultSet = org.mockito.Mockito.mock(ResultSet.class);
+
+        try (MockedStatic<DriverManager> mocked = org.mockito.Mockito.mockStatic(DriverManager.class)) {
+            mocked.when(() -> DriverManager.getConnection(expectedUrl, "tester", "secret"))
+                .thenReturn(connection);
+            when(connection.createStatement()).thenReturn(statement);
+            when(statement.executeQuery("SELECT VERSION()")).thenReturn(resultSet);
+            when(resultSet.next()).thenReturn(true);
+            when(resultSet.getString(1)).thenReturn("11.0.2-MariaDB");
+
+            var result = service.testConnection(request);
+
+            assertThat(result).containsEntry("success", true);
+            assertThat(result).containsEntry("version", "11.0.2-MariaDB");
+            mocked.verify(() -> DriverManager.getConnection(expectedUrl, "tester", "secret"));
+        }
+    }
+
+    @Test
+    void testConnection_shouldReturnErrorOnSQLException() throws Exception {
+        DatabaseConnectionTest request = new DatabaseConnectionTest();
+        request.setHost("127.0.0.1");
+        request.setPort(3307);
+        request.setDatabaseName("analytics");
+        request.setCharsetName("utf8mb4");
+        request.setUsername("tester");
+        request.setPassword("secret");
+
+        String expectedUrl = "jdbc:mariadb://127.0.0.1:3307/analytics?useUnicode=true&characterEncoding=utf8mb4&useSSL=false&serverTimezone=UTC";
+
+        try (MockedStatic<DriverManager> mocked = org.mockito.Mockito.mockStatic(DriverManager.class)) {
+            mocked.when(() -> DriverManager.getConnection(expectedUrl, "tester", "secret"))
+                .thenThrow(new SQLException("Access denied"));
+
+            var result = service.testConnection(request);
+
+            assertThat(result).containsEntry("success", false);
+            assertThat(result.get("message").toString()).contains("Access denied");
+        }
     }
 
     private static DatabaseConnection buildConnection(String id, String name) {
