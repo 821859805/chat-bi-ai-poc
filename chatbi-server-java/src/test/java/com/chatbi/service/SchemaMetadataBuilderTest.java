@@ -33,6 +33,7 @@ class SchemaMetadataBuilderTest {
     private JdbcTemplate jdbcTemplate;
 
     private SchemaMetadataBuilder builder;
+    private DatabaseConnection connection;
 
     @BeforeEach
     void setUp() {
@@ -41,6 +42,11 @@ class SchemaMetadataBuilderTest {
         ReflectionTestUtils.setField(builder, "databaseConnectionService", databaseConnectionService);
 
         when(databaseManager.getJdbcTemplate()).thenReturn(jdbcTemplate);
+
+        connection = new DatabaseConnection();
+        connection.setId("conn-1");
+        connection.setDatabaseName("test_db");
+        connection.setHost("localhost");
     }
 
     @Test
@@ -123,5 +129,64 @@ class SchemaMetadataBuilderTest {
         assertThat(summary).contains("主键/外键标识");
         assertThat(summary).contains("日期/时间");
         assertThat(summary).contains("样例: user_id=1001");
+    }
+
+    @Test
+    void buildTableMetadata_shouldPopulateSamples() {
+        List<Map<String, Object>> columns = List.of(
+            new HashMap<>(Map.of("name", "id")),
+            new HashMap<>(Map.of("name", "status"))
+        );
+
+        when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("test_db"), eq("orders")))
+            .thenReturn("订单信息");
+        when(jdbcTemplate.queryForList(eq("SELECT column_name, column_type, is_nullable, column_key, column_default, extra, column_comment "+
+            "FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position"),
+            eq("test_db"), eq("orders")))
+            .thenReturn(columns);
+        when(jdbcTemplate.queryForList(eq("SELECT * FROM orders LIMIT 5")))
+            .thenReturn(List.of(Map.of("id", 1, "status", "PAID")));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metadata = ReflectionTestUtils.invokeMethod(builder, "buildTableMetadata", "orders", connection);
+
+        assertThat(metadata).containsEntry("comment", "订单信息");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> enrichedColumns = (List<Map<String, Object>>) metadata.get("columns");
+        assertThat(enrichedColumns.get(0)).containsEntry("samples", List.of(1));
+        assertThat(enrichedColumns.get(1)).containsEntry("samples", List.of("PAID"));
+    }
+
+    @Test
+    void getTableComment_shouldReturnEmptyOnError() {
+        when(jdbcTemplate.queryForObject(anyString(), eq(String.class), any(), any()))
+            .thenThrow(new RuntimeException("boom"));
+
+        String comment = ReflectionTestUtils.invokeMethod(builder, "getTableComment", "orders", connection);
+
+        assertThat(comment).isEmpty();
+    }
+
+    @Test
+    void getColumnsWithComments_shouldReturnColumns() {
+        List<Map<String, Object>> columns = List.of(Map.of("name", "id"));
+        when(jdbcTemplate.queryForList(anyString(), any(), any()))
+            .thenReturn(columns);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> result = ReflectionTestUtils.invokeMethod(builder, "getColumnsWithComments", "orders", connection);
+
+        assertThat(result).containsExactly(Map.of("name", "id"));
+    }
+
+    @Test
+    void getSampleRows_shouldReturnRows() {
+        when(jdbcTemplate.queryForList("SELECT * FROM orders LIMIT 5"))
+            .thenReturn(List.of(Map.of("id", 1)));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = ReflectionTestUtils.invokeMethod(builder, "getSampleRows", "orders", 5, connection);
+
+        assertThat(rows).containsExactly(Map.of("id", 1));
     }
 }
