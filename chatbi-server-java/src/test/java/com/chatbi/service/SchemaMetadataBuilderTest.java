@@ -51,7 +51,7 @@ class SchemaMetadataBuilderTest {
 
     @Test
     void buildDatabaseMetadata_shouldAssembleStructure() {
-        when(databaseManager.getAllTables(any(DatabaseConnection.class))).thenReturn(List.of("orders"));
+        when(databaseManager.getAllTables(connection)).thenReturn(List.of("orders"));
 
         when(jdbcTemplate.queryForObject(anyString(), eq(String.class), any(), any()))
             .thenReturn("订单数据");
@@ -74,12 +74,12 @@ class SchemaMetadataBuilderTest {
             List.of(Map.of("id", 1L, "amount", 99.9))
         );
 
-        Map<String, Object> metadata = builder.buildDatabaseMetadata(null);
+        Map<String, Object> metadata = builder.buildDatabaseMetadata(connection);
 
         @SuppressWarnings("unchecked")
         Map<String, String> dbInfo = (Map<String, String>) metadata.get("db");
-        assertThat(dbInfo).containsEntry("host", "localhost");
-        assertThat(dbInfo).containsEntry("name", "test_db");
+        assertThat(dbInfo).containsEntry("host", connection.getHost());
+        assertThat(dbInfo).containsEntry("name", connection.getDatabaseName());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> tables = (Map<String, Object>) metadata.get("tables");
